@@ -1,0 +1,268 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  MonetizationOS proxy as a Lambda Web Function behind CloudFront.
+  Deploy with infra/deploy.sh, which also attaches the Web Function resource policy.
+
+Parameters:
+  CodeBucket:
+    Type: String
+    Description: Versioned S3 bucket that grants lambda.amazonaws.com s3:GetObject + s3:GetObjectVersion.
+  CodeKey:
+    Type: String
+    Description: Zip key. Use a new key per build; every revision property forces a new revision.
+  OriginAuth:
+    Type: String
+    AllowedValues: [IamAuth, ApplicationManaged]
+    Default: IamAuth
+    Description: >-
+      IamAuth = CloudFront OAC signs every origin request, direct calls are rejected by Lambda.
+      ApplicationManaged = public endpoint; only OriginVerifySecret keeps direct callers out.
+  OriginVerifySecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: >-
+      Sent by CloudFront as x-mos-origin-verify and checked by the proxy. A second lock under IamAuth,
+      the only one under ApplicationManaged.
+  OriginUrl:
+    Type: String
+    AllowedPattern: "^https?://[^\\s'\"\\\\]+$"
+  SurfaceSlug:
+    Type: String
+    Default: web
+  MosSecretKey:
+    Type: String
+    NoEcho: true
+  MosHost:
+    Type: String
+    Default: https://api.monetizationos.com
+  # Defaults match the Cloudflare proxy worker.
+  AnonymousSessionCookieName:
+    Type: String
+    Default: anon-session-id
+  AuthenticatedUserJwtCookieName:
+    Type: String
+    Default: __session
+  MosEndpointsPrefix:
+    Type: String
+    Default: /mos-endpoints/
+  InjectScriptUrl:
+    Type: String
+    Default: ""
+    Description: Script added to <head> on pages where a component transform runs. Empty injects nothing.
+  OriginRequestHeaders:
+    Type: String
+    NoEcho: true
+    Default: "{}"
+    Description: JSON object of headers added to every origin request.
+  MaxEnvironments:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 10000
+    Description: >-
+      Optional cap on the endpoint's execution environments, from 2 to 10,000. 0 leaves it uncapped, so only the
+      account's vCPU quota bounds scaling. At the cap, Lambda answers further requests with 429 instead of scaling.
+  StaticExtensions:
+    Type: String
+    Default: css,js,mjs,map,png,jpg,jpeg,gif,webp,avif,svg,ico,woff,woff2,ttf,otf,eot,mp4,webm,mp3,wasm
+    AllowedPattern: "^([a-z0-9]+(,[a-z0-9]+)*)?$"
+    Description: >-
+      Paths ending in these extensions go straight to the origin, skipping the proxy, which passes non-HTML
+      responses through untouched. Empty sends every path through the proxy. Off while OriginRequestHeaders is set.
+  LogRetentionInDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: Retention of the Web Function's log groups.
+
+Conditions:
+  UseIamAuth: !Equals [!Ref OriginAuth, IamAuth]
+  CapEnvironments: !Not [!Equals [!Ref MaxEnvironments, 0]]
+  # CloudFront can't add headers from the JSON parameter, and the origin may require them.
+  NoOriginRequestHeaders: !Equals [!Ref OriginRequestHeaders, "{}"]
+  InjectScript: !Not [!Equals [!Ref InjectScriptUrl, ""]]
+
+Resources:
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  WebFunction:
+    Type: AWS::Lambda::WebFunction
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-proxy"
+
+  # Owned here so retention applies from the first log; Lambda would create both with no expiry.
+  # Environments write to .local, which Lambda copies to the central group. MultiRegion needs one per Region.
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/web/${AWS::StackName}-proxy"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  LocalLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "${LogGroup}.local"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  Revision:
+    Type: AWS::Lambda::WebFunctionRevision
+    DependsOn: LocalLogGroup
+    Properties:
+      FunctionName: !Ref WebFunction
+      BuildConfig:
+        CodeConfig:
+          S3Object:
+            Bucket: !Ref CodeBucket
+            Key: !Ref CodeKey
+        RuntimeConfig:
+          Runtime: nodejs24.x
+      ServiceConfig:
+        ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+        TimeoutSeconds: 30
+        # One event loop per environment, so CPU per page bounds throughput. Past ~32 in flight, 300 KB
+        # pages mostly queue, and memory grows with pages in flight. Tune from load tests.
+        MaxConcurrencyPerEnvironment: 32
+        TelemetryConfig:
+          LoggingConfig:
+            LogGroup: !Ref LogGroup
+        EnvironmentVariables:
+          ORIGIN_URL: !Ref OriginUrl
+          SURFACE_SLUG: !Ref SurfaceSlug
+          MONETIZATION_OS_SECRET_KEY: !Ref MosSecretKey
+          MONETIZATION_OS_HOST: !Ref MosHost
+          ANONYMOUS_SESSION_COOKIE_NAME: !Ref AnonymousSessionCookieName
+          AUTHENTICATED_USER_JWT_COOKIE_NAME: !Ref AuthenticatedUserJwtCookieName
+          INJECT_SCRIPT_URL: !If [InjectScript, !Ref InjectScriptUrl, !Ref AWS::NoValue]
+          MONETIZATION_OS_ENDPOINTS_PREFIX: !Ref MosEndpointsPrefix
+          ORIGIN_REQUEST_HEADERS: !Ref OriginRequestHeaders
+          ORIGIN_VERIFY_SECRET: !Ref OriginVerifySecret
+
+  # HomeRegion: each page waits on the origin and then on the MOS API, so the proxy belongs next to
+  # the origin, not the viewer. MultiRegion buys nothing for a single-region origin.
+  Endpoint:
+    Type: AWS::Lambda::WebFunctionEndpoint
+    Properties:
+      FunctionName: !Ref WebFunction
+      EndpointName: prod
+      EndpointType: HomeRegion
+      AuthType: !Ref OriginAuth
+      ScalingConfig:
+        # An empty ScalingConfig clears a previous cap.
+        MaxEnvironments: !If [CapEnvironments, !Ref MaxEnvironments, !Ref AWS::NoValue]
+      RevisionWeights:
+        - RevisionId: !GetAtt Revision.RevisionId
+          Weight: 100
+
+  ViewerHostFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-viewer-host"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Send static paths to the origin, and copy viewer Host and Accept-Encoding for the proxy.
+        Runtime: cloudfront-js-2.0
+      # A switched origin inherits the default origin's signing and custom headers, so both are cleared.
+      # Lambda only accepts its own domain as Host, and CloudFront's forwarding of Accept-Encoding
+      # under CachingDisabled isn't documented, so carry both in headers the proxy owns. Overwriting
+      # any viewer-sent value keeps them trustworthy once only CloudFront reaches the endpoint.
+      FunctionCode: !Sub
+        - |
+          import cf from 'cloudfront';
+
+          var EXTENSIONS = '${Extensions}';
+          var STATIC = EXTENSIONS ? new RegExp('\\.(' + EXTENSIONS.split(',').join('|') + ')$', 'i') : null;
+          var ORIGIN = /^(https?):\/\/([^\/:?#]+)(?::(\d+))?(\/[^?#]*)?/.exec('${OriginUrl}');
+          var MOS_PREFIX = '${MosEndpointsPrefix}';
+
+          function handler(event) {
+            var request = event.request;
+            var headers = request.headers;
+            if (!headers.host) return { statusCode: 400, statusDescription: 'Bad Request' };
+            // A viewer's value would pick the host an origin that trusts these builds URLs from.
+            delete headers['x-forwarded-host'];
+            delete headers['forwarded'];
+            if (STATIC && ORIGIN && STATIC.test(request.uri) && request.uri.indexOf(MOS_PREFIX) !== 0) {
+              var origin = {
+                domainName: ORIGIN[2],
+                customOriginConfig: {
+                  port: ORIGIN[3] ? Number(ORIGIN[3]) : ORIGIN[1] === 'https' ? 443 : 80,
+                  protocol: ORIGIN[1],
+                  sslProtocols: ['TLSv1.2'],
+                },
+                originAccessControlConfig: { enabled: false },
+                customHeaders: {},
+              };
+              var path = (ORIGIN[4] || '').replace(/\/+$/, '');
+              if (path) origin.originPath = path;
+              cf.updateRequestOrigin(origin);
+              return request;
+            }
+            headers['x-mos-viewer-host'] = { value: headers.host.value };
+            headers['x-mos-accept-encoding'] = { value: headers['accept-encoding'] ? headers['accept-encoding'].value : 'identity' };
+            return request;
+          }
+        - Extensions: !If [NoOriginRequestHeaders, !Ref StaticExtensions, ""]
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: UseIamAuth
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-lambda-web"
+        OriginAccessControlOriginType: lambda
+        # Signs with X-Amz-* headers, leaving the viewer's Authorization header for the app.
+        SigningBehavior: always-amz-auth
+        SigningProtocol: sigv4
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2and3
+        Origins:
+          - Id: lambda-web
+            DomainName: !GetAtt Endpoint.DomainName
+            OriginAccessControlId: !If [UseIamAuth, !GetAtt OriginAccessControl.Id, !Ref AWS::NoValue]
+            OriginCustomHeaders:
+              - HeaderName: x-mos-origin-verify
+                HeaderValue: !Ref OriginVerifySecret
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: lambda-web
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          # Decisions are per viewer, so nothing is cached, and the proxy compresses. Static paths could
+          # get their own cached, CloudFront-compressed behaviour.
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
+          # All viewer headers, cookies and query strings, plus CloudFront's viewer location, ASN, TLS and
+          # HTTP version headers, minus Host. JA3/JA4 aren't included and can't be added to a Host-less policy.
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt ViewerHostFunction.FunctionMetadata.FunctionARN
+
+Outputs:
+  DistributionDomainName:
+    Value: !GetAtt Distribution.DomainName
+  DistributionArn:
+    Value: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+  WebFunctionArn:
+    Value: !Ref WebFunction
+  EndpointArn:
+    Value: !Ref Endpoint
+  EndpointDomainName:
+    Value: !GetAtt Endpoint.DomainName
