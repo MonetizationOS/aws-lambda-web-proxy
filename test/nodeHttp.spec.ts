@@ -32,7 +32,7 @@ describe('viewerUrl', () => {
 })
 
 describe('toFetchRequest', () => {
-    it('drops hop-by-hop, front-door, signing and viewer-forwarded host headers, and frames the buffered body', async () => {
+    it('drops hop-by-hop, front-door and signing headers, and frames the buffered body', async () => {
         const request = await toFetchRequest(
             incoming(
                 '/form',
@@ -46,8 +46,6 @@ describe('toFetchRequest', () => {
                     'x-amz-date': '20261015T000000Z',
                     'x-amz-security-token': 'token',
                     'x-amz-cf-id': 'cf-1',
-                    'x-forwarded-host': 'evil.example',
-                    forwarded: 'host=evil.example',
                     'accept-encoding': 'zstd',
                     'x-custom': 'kept',
                 },

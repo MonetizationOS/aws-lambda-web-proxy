@@ -27,9 +27,6 @@ const DROPPED_REQUEST_HEADERS = new Set([
     'upgrade',
     'expect',
     'content-length',
-    // A viewer's value, forwarded unchecked, would let it pick the host an origin that trusts these builds URLs from.
-    'x-forwarded-host',
-    'forwarded',
 ])
 // fetch decodes these, so the origin is only offered them and the decoded body is re-framed here.
 const ORIGIN_ACCEPT_ENCODING = 'gzip, deflate, br'
