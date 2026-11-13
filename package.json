@@ -23,7 +23,7 @@
         "format": "biome check --write --no-errors-on-unmatched"
     },
     "dependencies": {
-        "@monetizationos/proxy": "1.7.0"
+        "@monetizationos/proxy": "1.11.0"
     },
     "devDependencies": {
         "@biomejs/biome": "2.4.15",

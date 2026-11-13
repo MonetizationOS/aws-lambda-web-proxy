@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@monetizationos/proxy':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.11.0
+        version: 1.11.0
     devDependencies:
       '@biomejs/biome':
         specifier: 2.4.15
@@ -249,8 +249,8 @@ packages:
   '@jridgewell/sourcemap-codec@1.6.0':
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
 
-  '@monetizationos/proxy@1.7.0':
-    resolution: {integrity: sha512-Oz9QtzZPpQJwwQ3Ol6VH2z16Y/hFlb7JKz1zfYd51H/MnENpzRM99dpnOF7iXj6Dbm6CmSmUY+x9x/Bf02kXCw==}
+  '@monetizationos/proxy@1.11.0':
+    resolution: {integrity: sha512-WKT4juXrk164jQFJ1HCbfXAhJNQlILXk4ruFhLGbRYMNBah3X6clfN8X+BwBd61hccN1qKHtiWjieZVdYL/Jow==}
     engines: {node: '>=22'}
 
   '@oxc-project/types@0.153.0':
@@ -798,7 +798,7 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
-  '@monetizationos/proxy@1.7.0':
+  '@monetizationos/proxy@1.11.0':
     dependencies:
       cookie: 1.1.1
 
