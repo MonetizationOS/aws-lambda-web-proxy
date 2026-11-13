@@ -135,6 +135,13 @@ function compressor(req: IncomingMessage, response: Response): { encoding: strin
 
 /** Streams a web `Response` to Node, compressed when the viewer accepts it. */
 export async function sendResponse(req: IncomingMessage, res: ServerResponse, response: Response): Promise<void> {
+    // The viewer left before the response was ready. pipeline() would refuse the closed socket without reading the
+    // body, and the body's abort error would then crash the process. Not awaited: a tee branch's cancel waits for
+    // its sibling.
+    if (res.destroyed) {
+        response.body?.cancel().catch(() => {})
+        return
+    }
     const headers = new Headers(response.headers)
     for (const name of DROPPED_RESPONSE_HEADERS) headers.delete(name)
     if (isDecoded(headers.get('content-encoding'))) headers.delete('content-encoding')
