@@ -146,6 +146,18 @@ try {
     assert.equal(toOrigin.headers['x-mos-viewer-host'], undefined)
     assert.equal(toOrigin.headers['x-mos-accept-encoding'], undefined)
     assert.equal(toOrigin.headers['lambda-web-request-id'], undefined)
+    // It gets the viewer's host and protocol instead, which the core sets from the URL the proxy rebuilds.
+    assert.equal(toOrigin.headers['x-forwarded-host'], 'news.example.com')
+    assert.equal(toOrigin.headers['x-forwarded-proto'], 'https')
+
+    // 3a. Forwarded headers sent past CloudFront's function don't reach the origin.
+    await fetch(`${proxyUrl}/article`, {
+        headers: { ...viewerHeaders, 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'http', forwarded: 'host=evil.example' },
+    }).then((r) => r.arrayBuffer())
+    const spoofed = originRequests.at(-1)
+    assert.equal(spoofed.headers['x-forwarded-host'], 'news.example.com')
+    assert.equal(spoofed.headers['x-forwarded-proto'], 'https')
+    assert.equal(spoofed.headers.forwarded, undefined)
 
     // 3b. HTML is brotli-compressed for a viewer that accepts it.
     const raw = await new Promise((resolve, reject) => {

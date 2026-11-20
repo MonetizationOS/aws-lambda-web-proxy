@@ -99,6 +99,8 @@ Each pattern is a regex tested against the cookie **name**. Plain names like `^_
 infra/deploy.sh 'OriginRequestHeaders={"X-Api-Key": "secret", "X-Custom": "my-value"}'
 ```
 
+Origin requests also carry the viewer's host and protocol as `X-Forwarded-Host` and `X-Forwarded-Proto`, so the origin can build URLs on the public domain. Set either in `ORIGIN_REQUEST_HEADERS` to override it. [Static paths](#optional-static-paths-straight-to-the-origin) skip the proxy, so they don't get them.
+
 ## Optional: static paths straight to the origin
 
 The proxy passes non-HTML responses through untouched, so CloudFront sends paths ending in a static file extension straight to `ORIGIN_URL` and skips Lambda. This keeps assets off the endpoint's request rate and environments. The `StaticExtensions` stack parameter lists the extensions, matched case-insensitively. It defaults to `css,js,mjs,map,png,jpg,jpeg,gif,webp,avif,svg,ico,woff,woff2,ttf,otf,eot,mp4,webm,mp3,wasm`. Paths under `MONETIZATION_OS_ENDPOINTS_PREFIX` always go to the proxy. Set it to an empty string to send every path through the proxy, for example when the origin only accepts requests from the proxy.
@@ -130,7 +132,7 @@ flowchart LR
 ```
 
 - **CloudFront** terminates TLS on your domain and forwards requests uncached, with its viewer location, network and TLS headers.
-- **Forwarded host headers.** The CloudFront Function and the proxy drop any `X-Forwarded-Host` or `Forwarded` header the viewer sends, so an origin that builds URLs from them can't be pointed at another host.
+- **Forwarded host headers.** The CloudFront Function drops any `X-Forwarded-Host` or `Forwarded` header the viewer sends, and the proxy sets `X-Forwarded-Host` and `X-Forwarded-Proto` from the viewer's `Host` and protocol, so an origin that builds URLs from them can't be pointed at another host.
 - **Static paths.** The CloudFront Function sends paths with a [static extension](#optional-static-paths-straight-to-the-origin) to the origin, without signing or `x-mos-origin-verify`.
 - **Viewer headers.** Lambda only accepts its own domain as `Host`, so a CloudFront Function copies the viewer's into `x-mos-viewer-host`, and returns 400 when the viewer sent none. The proxy uses it to rebuild the public URL and rewrite origin links. The function also copies `Accept-Encoding` into `x-mos-accept-encoding`, or sets `identity` when the viewer sent none, which the proxy uses to choose the response encoding.
 - **HTML rewriting** uses [lol-html](https://github.com/cloudflare/lol-html), the engine behind Cloudflare's `HTMLRewriter`, built to WASM. See [`vendor/lol-html`](vendor/lol-html).

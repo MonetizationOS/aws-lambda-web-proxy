@@ -2,8 +2,8 @@ import { setImmediate } from 'node:timers/promises'
 import type { ElementHandlers, HtmlRewriterAdapter, HtmlRewriterCapabilities, HtmlRewriterSession } from '@monetizationos/proxy'
 import { Element, type ElementContentHandlers, type EndTag, HTMLRewriter, type TextChunk } from '../vendor/lol-html/dist/lol_html.js'
 
-// The core hands each pass the whole page as one chunk, and a WASM write runs synchronously, so a
-// 2 MB page would hold the event loop for ~30 ms per pass. Slicing and yielding between slices
+// The core hands each pass of a page with a range the whole page as one chunk, and a WASM write runs
+// synchronously, so a 2 MB page would hold the event loop for ~30 ms per pass. Slicing and yielding between slices
 // lets other requests in the environment run, at no measurable cost in total rewrite time.
 const WRITE_SLICE_BYTES = 16 * 1024
 

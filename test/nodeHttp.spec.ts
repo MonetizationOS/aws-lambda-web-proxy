@@ -32,7 +32,7 @@ describe('viewerUrl', () => {
 })
 
 describe('toFetchRequest', () => {
-    it('drops hop-by-hop, front-door, signing and viewer-forwarded host headers, and frames the buffered body', async () => {
+    it('drops hop-by-hop, front-door and signing headers, and frames the buffered body', async () => {
         const request = await toFetchRequest(
             incoming(
                 '/form',
@@ -46,8 +46,6 @@ describe('toFetchRequest', () => {
                     'x-amz-date': '20261015T000000Z',
                     'x-amz-security-token': 'token',
                     'x-amz-cf-id': 'cf-1',
-                    'x-forwarded-host': 'evil.example',
-                    forwarded: 'host=evil.example',
                     'accept-encoding': 'zstd',
                     'x-custom': 'kept',
                 },
@@ -127,6 +125,29 @@ describe('response handling', () => {
             throw new Error('origin down')
         })
         expect(failed.status).toBe(502)
+    })
+
+    // A range page is read whole before its response is ready, and an aborted origin body errors once read.
+    it('cancels the body of a response the viewer left before', async () => {
+        let onCancel = () => {}
+        const cancelled = new Promise<void>((resolve) => {
+            onCancel = resolve
+        })
+        const server = createServer(
+            createRequestListener(async (request) => {
+                await new Promise((resolve) => request.signal.addEventListener('abort', resolve))
+                return new Response(new ReadableStream({ cancel: onCancel }), { headers: { 'content-type': 'text/html' } })
+            }),
+        )
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+        try {
+            const req = httpRequest({ port: (server.address() as AddressInfo).port }).on('error', () => {})
+            req.end()
+            server.once('request', () => setImmediate(() => req.destroy()))
+            await cancelled
+        } finally {
+            server.close()
+        }
     })
 })
 
