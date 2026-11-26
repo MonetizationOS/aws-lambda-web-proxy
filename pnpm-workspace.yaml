@@ -1,3 +1,6 @@
 minimumReleaseAge: 4320
+# Our own package
+minimumReleaseAgeExclude:
+    - "@monetizationos/proxy"
 allowBuilds:
     esbuild: true
